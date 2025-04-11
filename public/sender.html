@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Sender Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    #taskList { margin-top: 20px; }
+    .task { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Sender Dashboard</h1>
+  <div>
+    <label>Your Sender ID: <input type="text" id="senderId" placeholder="e.g. sender123"></label>
+    <button onclick="fetchTasks()">Load Available Tasks</button>
+  </div>
+  
+  <div id="taskList">
+    <h2>Available Tasks</h2>
+    <div id="tasksContainer"></div>
+  </div>
+  
+  <script>
+    async function fetchTasks() {
+      const res = await fetch('/api/tasks');
+      const result = await res.json();
+      const container = document.getElementById('tasksContainer');
+      container.innerHTML = '';
+      if (result.success) {
+        result.tasks.forEach(task => {
+          container.innerHTML += `<div class="task">
+                                    <p><strong>Task ID:</strong> ${task.taskId}</p>
+                                    <p><strong>Description:</strong> ${task.description}</p>
+                                    <p><strong>Payment:</strong> $${task.payment}</p>
+                                    <p><strong>Status:</strong> ${task.status}</p>
+                                    <button onclick="assignTask(${task.taskId})">Assign Task</button>
+                                  </div>`;
+        });
+      }
+    }
+    
+    async function assignTask(taskId) {
+      const senderId = document.getElementById('senderId').value;
+      if (!senderId) {
+        alert("Please enter your Sender ID.");
+        return;
+      }
+      const res = await fetch('/api/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, senderId })
+      });
+      const result = await res.json();
+      if (result.success) {
+        alert(`Task ${taskId} assigned to you.`);
+        fetchTasks();
+      } else {
+        alert("Error assigning task: " + result.message);
+      }
+    }
+  </script>
+</body>
+</html>

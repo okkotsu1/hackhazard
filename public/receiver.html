@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Receiver Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f7f7f7;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    section {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    label, input, textarea, button {
+      display: block;
+      width: 100%;
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+    button {
+      padding: 8px;
+      background-color: #007BFF;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #subtasksResult {
+      background-color: #eee;
+      padding: 10px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Receiver Dashboard</h1>
+  </header>
+
+  <!-- Section for Creating a New Task -->
+  <section id="createTaskSection">
+    <h2>Create New Task</h2>
+    <form id="createTaskForm">
+      <label for="description">Task Description:</label>
+      <textarea id="description" placeholder="Enter task description..." required></textarea>
+      
+      <label for="payment">Proposed Payment ($):</label>
+      <input type="number" id="payment" placeholder="Enter payment amount" required />
+
+      <label for="receiverId">Your Receiver ID:</label>
+      <input type="text" id="receiverId" placeholder="Enter your receiver ID" required />
+
+      <button type="submit">Create Task</button>
+    </form>
+    <div id="taskCreationResult"></div>
+  </section>
+
+  <!-- Section for Generating Subtasks -->
+  <section id="subtaskSection">
+    <h2>Generate Subtasks</h2>
+    <label for="subtaskInput">Enter Task Description for Subtasks:</label>
+    <textarea id="subtaskInput" placeholder="Enter the task description to split into subtasks..." required></textarea>
+    <button id="generateSubtasksBtn">Generate Subtasks</button>
+    <h3>Generated Subtasks:</h3>
+    <pre id="subtasksResult"></pre>
+  </section>
+
+  <!-- (Optional) Section to List Available Tasks -->
+  <section id="tasksSection">
+    <h2>Available Tasks</h2>
+    <div id="tasksList">Loading tasks...</div>
+  </section>
+
+  <!-- Socket.io for real-time updates (if needed) -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    // Handle real-time task updates.
+    socket.on('taskCreated', (task) => {
+      console.log("Task created:", task);
+      loadTasks();
+    });
+    socket.on('taskUpdated', (task) => {
+      console.log("Task updated:", task);
+      loadTasks();
+    });
+
+    // Function to load tasks from the backend.
+    async function loadTasks() {
+      try {
+        const response = await fetch('/api/tasks');
+        const data = await response.json();
+        if (data.success) {
+          const taskListDiv = document.getElementById('tasksList');
+          taskListDiv.innerHTML = '';
+          data.tasks.forEach(task => {
+            const taskDiv = document.createElement('div');
+            taskDiv.style.border = '1px solid #ccc';
+            taskDiv.style.margin = '10px 0';
+            taskDiv.style.padding = '10px';
+            taskDiv.style.borderRadius = '5px';
+            taskDiv.innerHTML = `<strong>Task ID:</strong> ${task.taskId}<br>
+                                 <strong>Description:</strong> ${task.description}<br>
+                                 <strong>Payment:</strong> $${task.payment}<br>
+                                 <strong>Status:</strong> ${task.status}<br>
+                                 <strong>Receiver ID:</strong> ${task.receiverId}<br>
+                                 <strong>Sender ID:</strong> ${task.senderId || 'N/A'}`;
+            taskListDiv.appendChild(taskDiv);
+          });
+        }
+      } catch (error) {
+        console.error("Error loading tasks:", error);
+      }
+    }
+    // Load tasks on page load.
+    loadTasks();
+
+    // Handling Task Creation.
+    document.getElementById('createTaskForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const description = document.getElementById('description').value;
+      const payment = document.getElementById('payment').value;
+      const receiverId = document.getElementById('receiverId').value;
+      try {
+        const response = await fetch('/api/task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, payment, receiverId })
+        });
+        const result = await response.json();
+        if (result.success) {
+          document.getElementById('taskCreationResult').innerText = "Task created successfully!";
+          document.getElementById('createTaskForm').reset();
+          loadTasks();
+        } else {
+          document.getElementById('taskCreationResult').innerText = "Error: " + result.message;
+        }
+      } catch (error) {
+        console.error("Error creating task:", error);
+      }
+    });
+
+    // Handling Subtask Generation.
+    document.getElementById('generateSubtasksBtn').addEventListener('click', async () => {
+      const taskDescription = document.getElementById('subtaskInput').value;
+      if (!taskDescription.trim()) {
+        alert("Please enter a task description.");
+        return;
+      }
+      try {
+        const response = await fetch('/api/generateSubtasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskDescription })
+        });
+        const data = await response.json();
+        if (data.success) {
+          // Print the subtasks on the server terminal (they are already logged there)
+          // and also display them on the page:
+          document.getElementById('subtasksResult').innerText = JSON.stringify(data.subtasks, null, 2);
+        } else {
+          alert("Failed to generate subtasks: " + data.message);
+        }
+      } catch (error) {
+        console.error("Error generating subtasks:", error);
+        alert("An error occurred while generating subtasks.");
+      }
+    });
+  </script>
+</body>
+</html>
