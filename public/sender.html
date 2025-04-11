@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sender Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    input, button { margin: 5px 0; padding: 8px; width: 100%; box-sizing: border-box; }
+    .task { border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 6px; }
+    .subtask { border: 1px solid #ccc; padding: 8px; margin: 8px 0; border-radius: 4px; }
+    .subtask-btn { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Sender Dashboard</h1>
+  
+  <!-- Sender ID input -->
+  <div>
+    <label>Your Sender ID:</label>
+    <input type="text" id="senderId" placeholder="Enter your sender ID">
+  </div>
+  
+  <!-- Load Tasks Button -->
+  <div>
+    <button onclick="fetchTasks()">Load Available Tasks</button>
+  </div>
+  
+  <!-- Tasks Container -->
+  <div id="tasksContainer">
+    <h2>Available Tasks:</h2>
+  </div>
+  
+  <!-- Subtasks Container (initially hidden) -->
+  <div id="subtasksContainer" style="display:none;">
+    <h2>Subtasks for Task <span id="assignedTaskId"></span>:</h2>
+    <div id="subtasksList"></div>
+  </div>
+  
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // Global object to track scanning state per subtask.
+    const scanningStates = {};
+    
+    // Fetch available tasks from the backend.
+    async function fetchTasks() {
+      try {
+        const res = await fetch('/api/tasks');
+        const result = await res.json();
+        const container = document.getElementById('tasksContainer');
+        container.innerHTML = '<h2>Available Tasks:</h2>';
+        if (result.success && result.tasks.length > 0) {
+          result.tasks.forEach(task => {
+            container.innerHTML += `
+              <div class="task">
+                <p><strong>Task ID:</strong> ${task.taskId}</p>
+                <p><strong>Description:</strong> ${task.description}</p>
+                <p><strong>Payment:</strong> $${task.payment}</p>
+                <p><strong>Status:</strong> ${task.status}</p>
+                <button onclick="assignTask(${task.taskId})">Assign Task</button>
+              </div>
+            `;
+          });
+        } else {
+          container.innerHTML += '<p>No available tasks.</p>';
+        }
+      } catch (error) {
+        console.error("Error fetching tasks:", error);
+      }
+    }
+    
+    // Assign a task to the sender.
+    async function assignTask(taskId) {
+      const senderId = document.getElementById('senderId').value;
+      if (!senderId) {
+        alert("Please enter your sender ID.");
+        return;
+      }
+      try {
+        const res = await fetch('/api/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId, senderId })
+        });
+        const result = await res.json();
+        if (result.success) {
+          alert(`Task ${taskId} assigned to you.`);
+          // After assignment, generate and display subtasks.
+          // Here we assume the task description can be used to generate subtasks.
+          generateAndDisplaySubtasks(result.task.description, taskId);
+        } else {
+          alert("Error assigning task: " + result.message);
+        }
+      } catch (error) {
+        console.error("Error assigning task:", error);
+      }
+    }
+    
+    // Generate subtasks from the backend based on the task description.
+    async function generateAndDisplaySubtasks(taskDescription, taskId) {
+      try {
+        const res = await fetch('/api/generateSubtasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskDescription })
+        });
+        const result = await res.json();
+        if (result.success) {
+          // Update UI to show the assigned task ID.
+          document.getElementById('assignedTaskId').innerText = taskId;
+          const subtasksList = document.getElementById('subtasksList');
+          subtasksList.innerHTML = '';
+          result.subtasks.forEach(subtask => {
+            subtasksList.innerHTML += `
+              <div class="subtask">
+                <p><strong>Subtask ${subtask.id}:</strong> ${subtask.description}</p>
+                <p><strong>Criteria:</strong> ${subtask.criteria}</p>
+                <button class="subtask-btn" id="btn-${subtask.id}" onclick="toggleScanning(${subtask.id})">Do subtask</button>
+              </div>
+            `;
+            // Initialize scanning state for this subtask as false.
+            scanningStates[subtask.id] = false;
+          });
+          document.getElementById('subtasksContainer').style.display = 'block';
+        } else {
+          alert("Error generating subtasks: " + result.message);
+        }
+      } catch (error) {
+        console.error('Error generating subtasks:', error);
+      }
+    }
+    
+    // Toggle scanning state for a given subtask.
+    async function toggleScanning(subtaskId) {
+      const btn = document.getElementById(`btn-${subtaskId}`);
+      if (!scanningStates[subtaskId]) {
+        // Start scanning by calling the Electron IPC exposed API.
+        const response = await window.electronAPI.startScanning(subtaskId);
+        console.log("Start scanning response:", response);
+        btn.innerText = "Stop scanning";
+        scanningStates[subtaskId] = true;
+      } else {
+        // Stop scanning.
+        const response = await window.electronAPI.stopScanning();
+        console.log("Stop scanning response:", response);
+        btn.innerText = "Do subtask";
+        scanningStates[subtaskId] = false;
+      }
+    }
+    
+    // Listen for real-time task updates via Socket.io.
+    const socket = io();
+    socket.on('taskUpdated', (task) => {
+      // Optionally, refresh the tasks list if needed.
+      fetchTasks();
+    });
+    
+    // Load tasks when the page loads.
+    fetchTasks();
+  </script>
+</body>
+</html>

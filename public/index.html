@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Main Selection</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin-top: 100px;
+    }
+    button {
+      font-size: 1.2em;
+      padding: 15px 30px;
+      margin: 20px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Welcome to the Task Management App</h1>
+  <p>Please select your role:</p>
+  <button id="senderBtn">Sender</button>
+  <button id="receiverBtn">Receiver</button>
+
+  <script>
+    // When the user clicks a role, navigate to the corresponding page.
+    document.getElementById('senderBtn').addEventListener('click', () => {
+      window.location.href = 'sender.html';
+    });
+    document.getElementById('receiverBtn').addEventListener('click', () => {
+      window.location.href = 'receiver.html';
+    });
+  </script>
+</body>
+</html>
