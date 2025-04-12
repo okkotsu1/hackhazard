@@ -14,7 +14,7 @@
 <body>
   <h1>Sender Dashboard</h1>
   
-  <!-- Sender ID input -->
+  <!-- Sender ID input (For debugging; backend now uses session info) -->
   <div>
     <label>Your Sender ID:</label>
     <input type="text" id="senderId" placeholder="Enter your sender ID">
@@ -39,10 +39,11 @@
   <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    // Global object to track scanning state per subtask.
+    const user = JSON.parse(localStorage.getItem('user') || 'null');
+    if (!user || user.role !== 'sender') window.location = 'index.html';
     const scanningStates = {};
+    let currentTaskId = null;
     
-    // Fetch available tasks from the backend.
     async function fetchTasks() {
       try {
         const res = await fetch('/api/tasks');
@@ -50,14 +51,15 @@
         const container = document.getElementById('tasksContainer');
         container.innerHTML = '<h2>Available Tasks:</h2>';
         if (result.success && result.tasks.length > 0) {
+          // *Important change*: Using task.id (not task.taskId)
           result.tasks.forEach(task => {
             container.innerHTML += `
               <div class="task">
-                <p><strong>Task ID:</strong> ${task.taskId}</p>
+                <p><strong>Task ID:</strong> ${task.id}</p>
                 <p><strong>Description:</strong> ${task.description}</p>
                 <p><strong>Payment:</strong> $${task.payment}</p>
                 <p><strong>Status:</strong> ${task.status}</p>
-                <button onclick="assignTask(${task.taskId})">Assign Task</button>
+                <button onclick="assignTask(${task.id})">Assign Task</button>
               </div>
             `;
           });
@@ -69,24 +71,25 @@
       }
     }
     
-    // Assign a task to the sender.
     async function assignTask(taskId) {
+      // Retrieve senderId from input (for now; backend will override with session info)
       const senderId = document.getElementById('senderId').value;
       if (!senderId) {
         alert("Please enter your sender ID.");
         return;
       }
       try {
+        // *Important change*: taskId is now a valid number from task.id
         const res = await fetch('/api/assign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // Even if we send senderId here, the backend uses req.session.user.id
           body: JSON.stringify({ taskId, senderId })
         });
         const result = await res.json();
         if (result.success) {
           alert(`Task ${taskId} assigned to you.`);
-          // After assignment, generate and display subtasks.
-          // Here we assume the task description can be used to generate subtasks.
+          currentTaskId = taskId;
           generateAndDisplaySubtasks(result.task.description, taskId);
         } else {
           alert("Error assigning task: " + result.message);
@@ -96,17 +99,15 @@
       }
     }
     
-    // Generate subtasks from the backend based on the task description.
     async function generateAndDisplaySubtasks(taskDescription, taskId) {
       try {
         const res = await fetch('/api/generateSubtasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskDescription })
+          body: JSON.stringify({ taskDescription, taskId })
         });
         const result = await res.json();
         if (result.success) {
-          // Update UI to show the assigned task ID.
           document.getElementById('assignedTaskId').innerText = taskId;
           const subtasksList = document.getElementById('subtasksList');
           subtasksList.innerHTML = '';
@@ -115,10 +116,12 @@
               <div class="subtask">
                 <p><strong>Subtask ${subtask.id}:</strong> ${subtask.description}</p>
                 <p><strong>Criteria:</strong> ${subtask.criteria}</p>
-                <button class="subtask-btn" id="btn-${subtask.id}" onclick="toggleScanning(${subtask.id})">Do subtask</button>
+                <button class="subtask-btn" id="btn-${subtask.id}"
+                  onclick="toggleScanning(${subtask.id}, '${encodeURIComponent(subtask.criteria)}')">
+                  Do subtask
+                </button>
               </div>
             `;
-            // Initialize scanning state for this subtask as false.
             scanningStates[subtask.id] = false;
           });
           document.getElementById('subtasksContainer').style.display = 'block';
@@ -130,32 +133,22 @@
       }
     }
     
-    // Toggle scanning state for a given subtask.
-    async function toggleScanning(subtaskId) {
+    async function toggleScanning(subtaskId, criteria) {
       const btn = document.getElementById(`btn-${subtaskId}`);
       if (!scanningStates[subtaskId]) {
-        // Start scanning by calling the Electron IPC exposed API.
-        const response = await window.electronAPI.startScanning(subtaskId);
-        console.log("Start scanning response:", response);
+        await window.electronAPI.startScanning(currentTaskId, subtaskId, decodeURIComponent(criteria));
         btn.innerText = "Stop scanning";
         scanningStates[subtaskId] = true;
       } else {
-        // Stop scanning.
-        const response = await window.electronAPI.stopScanning();
-        console.log("Stop scanning response:", response);
+        await window.electronAPI.stopScanning();
         btn.innerText = "Do subtask";
         scanningStates[subtaskId] = false;
       }
     }
     
-    // Listen for real-time task updates via Socket.io.
     const socket = io();
-    socket.on('taskUpdated', (task) => {
-      // Optionally, refresh the tasks list if needed.
-      fetchTasks();
-    });
+    socket.on('taskUpdated', () => fetchTasks());
     
-    // Load tasks when the page loads.
     fetchTasks();
   </script>
 </body>

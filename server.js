@@ -1,174 +1,302 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const http = require('http');
-const socketIo = require('socket.io');
-const Groq = require('groq-sdk');
+// server.js
+require('dotenv').config();
+const express       = require('express');
+const bodyParser    = require('body-parser');
+const http          = require('http');
+const socketIo      = require('socket.io');
+const session       = require('express-session');
+const bcrypt        = require('bcrypt');
+const Groq          = require('groq-sdk');
+const groq = new Groq({apiKey: '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'}) 
+const db            = require('./db');
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-const io = socketIo(server);
+const io     = socketIo(server);
+const PORT   = process.env.PORT || 3000;
 
-// Initialize the Groq SDK with your API key
-const groq = new Groq({ apiKey: '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' });
-
-const PORT = process.env.PORT || 3000;
-
-// Increase JSON payload limit
+// Middleware
 app.use(bodyParser.json({ limit: '10mb' }));
-
-// Serve static assets
 app.use(express.static('public'));
 
-// In‑memory storage
-let tasks = [];
-let nextTaskId = 1;
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false } // Set to true if using HTTPS
+  })
+);
 
-// Stub ML processor
-function processML(ocrData) {
-  console.log("Processing ML on OCR data:", ocrData);
-  // Replace with real logic; returns "pass" or "fail"
-  return "pass";
+// Helper: require login middleware
+function requireLogin(req, res, next) {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: 'Not logged in' });
+  }
+  next();
 }
 
-/**
- * generateSubtasks: calls Groq to break a high‑level task into three subtasks,
- * each with id, description, and OCR-based criteria.
- */
-async function generateSubtasks(taskDescription) {
+// Helper: Generate subtasks using Groq (simplified)
+async function generateSubtasks(description) {
   const messages = [
-    {
-      role: "system",
-      content: `You are an AI task‑decomposer. Given a single high‑level task, break it into exactly three sequential subtasks.
-Output JSON exactly in this format:
+    { role: "system", content: `You are an AI task‑decomposer.  
+Given a single High‑Level Task, break it into exactly three sequential, low‑level subtasks.  
+
+For each subtask, provide:
+- "id": 1, 2, or 3  
+- "description": one concise sentence of the action to perform  
+- "criteria": the exact OCR log keywords or patterns that would unambiguously indicate completion of this subtask  
+
+Do NOT analyze any OCR data yourself—just produce the subtasks and their OCR‑based success criteria.  
+
+Output (JSON):
 {
   "subtasks": [
-    { "id": 1, "description": "…", "criteria": "…" },
-    { "id": 2, "description": "…", "criteria": "…" },
-    { "id": 3, "description": "…", "criteria": "…" }
+    {
+      "id": 1,
+      "description": "…",
+      "criteria": "…"
+    },
+    {
+      "id": 2,
+      "description": "…",
+      "criteria": "…"
+    },
+    {
+      "id": 3,
+      "description": "…",
+      "criteria": "…"
+    }
   ]
 }`
-    },
-    { role: "user", content: taskDescription }
+ },
+    { role: "user",   content: description }
   ];
-
-  const chatCompletion = await groq.chat.completions.create({
+  const chat = await groq.chat.completions.create({
     messages,
     model: "qwen-qwq-32b",
     temperature: 0.6,
-    max_completion_tokens: 4096,
-    top_p: 0.95,
     stream: true
   });
-
   let full = "";
-  for await (const chunk of chatCompletion) {
-    const c = chunk.choices[0]?.delta?.content || "";
-    process.stdout.write(c);
-    full += c;
+  for await (const chunk of chat) {
+    full += chunk.choices[0].delta?.content || "";
   }
-  console.log("\n\nGroq response complete.");
-
-  // Extract JSON blob
-  const start = full.indexOf('{'), end = full.lastIndexOf('}');
-  if (start < 0 || end < 0) throw new Error("Invalid JSON from model");
-  return JSON.parse(full.slice(start, end + 1));
+  return JSON.parse(
+    full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)
+  ).subtasks;
 }
 
-// ------------------ Endpoints ------------------
+// Authentication Endpoints
 
-// 1) Create a new task
-app.post('/api/task', (req, res) => {
-  const { description, payment, receiverId } = req.body;
-  if (!description || !payment || !receiverId) {
-    return res.status(400).json({ success: false, message: "Missing parameters." });
-  }
-  const task = {
-    taskId: nextTaskId++,
-    description,
-    payment,
-    receiverId,
-    senderId: null,
-    status: "open",     // overall status
-    subtasks: []        // will hold generated subtasks
-  };
-  tasks.push(task);
-  io.emit('taskCreated', task);
-  res.json({ success: true, task });
-});
-
-// 2) List available tasks
-app.get('/api/tasks', (req, res) => {
-  const avail = tasks.filter(t => t.status === "open" || t.status === "doing task");
-  res.json({ success: true, tasks: avail });
-});
-
-// 3) Assign a task to a sender
-app.post('/api/assign', (req, res) => {
-  const { taskId, senderId } = req.body;
-  const task = tasks.find(t => t.taskId == taskId);
-  if (!task) return res.status(404).json({ success: false, message: "Task not found" });
-  task.senderId = senderId;
-  task.status = "doing task";
-  io.emit('taskUpdated', task);
-  res.json({ success: true, task });
-});
-
-// 4) Generate & store subtasks for a task
-app.post('/api/generateSubtasks', async (req, res) => {
-  const { taskDescription } = req.body;
-  if (!taskDescription) {
-    return res.status(400).json({ success: false, message: "taskDescription is required." });
+// Sign Up
+app.post('/api/signup', async (req, res) => {
+  const { username, password, role } = req.body;
+  if (!username || !password || !role) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
   }
   try {
-    const { subtasks } = await generateSubtasks(taskDescription);
-    console.log(`Generated subtasks for description "${taskDescription}":`, subtasks);
-    res.json({ success: true, subtasks });
+    const password_hash = await bcrypt.hash(password, 10);
+    const result = await db.query(
+      `INSERT INTO users (username, password_hash, role)
+       VALUES ($1, $2, $3)
+       RETURNING id, username, role`,
+      [username, password_hash, role]
+    );
+    const user = result.rows[0];
+    // Store numeric user id in session
+    req.session.user = user;
+    res.json({ success: true, user });
   } catch (err) {
-    console.error("Error generating subtasks:", err);
+    if (err.code === '23505') {
+      return res.status(409).json({ success: false, message: 'Username already taken' });
+    }
+    console.error(err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 5) Upload OCR data for a specific subtask
-app.post('/api/upload', (req, res) => {
-  const { senderId, taskId, subtaskId, timestamp, data } = req.body;
-  if (!senderId || !taskId || !subtaskId || !data?.length) {
-    return res.status(400).json({ success: false, message: "Missing parameters." });
+// Log In
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
   }
-  const task = tasks.find(t => t.taskId == taskId && t.senderId === senderId);
-  if (!task) return res.status(404).json({ success: false, message: "Assigned task not found." });
-
-  const sub = task.subtasks.find(s => s.id === subtaskId);
-  if (!sub) return res.status(404).json({ success: false, message: "Subtask not found." });
-
-  console.log(`OCR upload for Task ${taskId}, Subtask ${subtaskId} at ${timestamp}`);
-  const result = processML(data);
-
-  if (result === "pass") {
-    sub.status = "passed";
-    io.emit('subtaskUpdated', { taskId, subtaskId, status: "passed" });
-  } else {
-    io.emit('subtaskUpdated', { taskId, subtaskId, status: sub.status });
+  try {
+    const { rows } = await db.query(
+      `SELECT id, username, password_hash, role
+       FROM users WHERE username = $1`,
+      [username]
+    );
+    if (rows.length === 0) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+    // Remove hash before storing in session
+    delete user.password_hash;
+    req.session.user = user;
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
   }
-
-  // If all subtasks passed, mark overall task passed
-  if (task.subtasks.every(s => s.status === "passed")) {
-    task.status = "passed";
-    io.emit('taskUpdated', task);
-  }
-
-  res.json({ success: true, subtask: sub });
 });
 
-// ------------------ Start ------------------
-
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-io.on('connection', socket => {
-  console.log('Client connected:', socket.id);
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+// Log Out
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
   });
+});
+
+// Task Endpoints
+
+// Create a new task (Receiver only)
+app.post('/api/task', requireLogin, async (req, res) => {
+  const { description, payment } = req.body;
+  const receiverId = req.session.user.id;
+  if (!description || !payment) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
+  }
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO tasks
+         (description, payment, receiver_id, status)
+       VALUES ($1, $2, $3, 'open')
+       RETURNING *`,
+      [description, payment, receiverId]
+    );
+    const task = rows[0];
+    io.emit('taskCreated', task);
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// List tasks (open or in-progress)
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM tasks
+       WHERE status IN ('open','doing task')`
+    );
+    res.json({ success: true, tasks: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Assign a task to a sender
+app.post('/api/assign', requireLogin, async (req, res) => {
+  const { taskId } = req.body;
+  // Use the numeric id from session rather than passing a string from the client.
+  const senderId = req.session.user.id;
+  try {
+    const { rows, rowCount } = await db.query(
+      `UPDATE tasks
+         SET sender_id = $1, status = 'doing task'
+       WHERE id = $2 AND status = 'open'
+       RETURNING *`,
+      [senderId, taskId]
+    );
+    if (rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+    const task = rows[0];
+    io.emit('taskUpdated', task);
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Generate and store subtasks for a given task
+app.post('/api/generateSubtasks', requireLogin, async (req, res) => {
+  const { taskId, taskDescription } = req.body;
+  if (!taskId || !taskDescription) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
+  }
+  try {
+    const subtasks = await generateSubtasks(taskDescription);
+    const insertText = `
+      INSERT INTO subtasks
+        (task_id, id, description, criteria, status)
+      VALUES ($1, $2, $3, $4, 'pending')
+    `;
+    for (const sub of subtasks) {
+      await db.query(insertText, [
+        taskId,
+        sub.id,
+        sub.description,
+        sub.criteria
+      ]);
+    }
+    io.emit('subtasksGenerated', { taskId, subtasks });
+    res.json({ success: true, subtasks });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Upload result for a subtask
+app.post('/api/upload', requireLogin, async (req, res) => {
+  const { senderId, taskId, subtaskId, result } = req.body;
+  if (!senderId || !taskId || !subtaskId || !result) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
+  }
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO uploads
+         (sender_id, subtask_id, result)
+       VALUES ($1, $2, $3)`,
+      [senderId, subtaskId, result]
+    );
+    await client.query(
+      `UPDATE subtasks
+         SET status = $1
+       WHERE task_id = $2 AND id = $3`,
+      [result === 'pass' ? 'passed' : 'pending', taskId, subtaskId]
+    );
+    const { rows } = await client.query(
+      `SELECT COUNT(*) FILTER (WHERE status != 'passed') AS not_passed
+         FROM subtasks WHERE task_id = $1`,
+      [taskId]
+    );
+    if (Number(rows[0].not_passed) === 0) {
+      await client.query(
+        `UPDATE tasks SET status='passed' WHERE id=$1`,
+        [taskId]
+      );
+      io.emit('taskUpdated', { taskId, status: 'passed' });
+    }
+    await client.query('COMMIT');
+    io.emit('subtaskUpdated', {
+      taskId,
+      subtaskId,
+      status: result === 'pass' ? 'passed' : 'pending'
+    });
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Start the server
+server.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });

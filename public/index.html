@@ -1,36 +1,57 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Main Selection</title>
+  <meta charset="UTF-8" />
+  <title>Login / Signup</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin-top: 100px;
-    }
-    button {
-      font-size: 1.2em;
-      padding: 15px 30px;
-      margin: 20px;
-      cursor: pointer;
-    }
+    body { font-family: Arial; max-width: 400px; margin: 50px auto; }
+    input, select, button { width: 100%; margin: 8px 0; padding: 8px; }
   </style>
 </head>
 <body>
-  <h1>Welcome to the Task Management App</h1>
-  <p>Please select your role:</p>
-  <button id="senderBtn">Sender</button>
-  <button id="receiverBtn">Receiver</button>
+  <h2>Login</h2>
+  <input id="loginUser"     placeholder="Username" />
+  <input id="loginPass" type="password" placeholder="Password" />
+  <button onclick="doLogin()">Log In</button>
+  <hr/>
+  <h2>Sign Up</h2>
+  <input id="signUser"      placeholder="Username" />
+  <input id="signPass" type="password" placeholder="Password" />
+  <select id="signRole">
+    <option value="">Select Role</option>
+    <option value="receiver">Receiver</option>
+    <option value="sender">Sender</option>
+  </select>
+  <button onclick="doSignup()">Sign Up</button>
 
   <script>
-    // When the user clicks a role, navigate to the corresponding page.
-    document.getElementById('senderBtn').addEventListener('click', () => {
-      window.location.href = 'sender.html';
-    });
-    document.getElementById('receiverBtn').addEventListener('click', () => {
-      window.location.href = 'receiver.html';
-    });
+    async function doLogin() {
+      const u = document.getElementById('loginUser').value;
+      const p = document.getElementById('loginPass').value;
+      const res = await fetch('/api/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username:u, password:p })
+      });
+      const j = await res.json();
+      if (!j.success) return alert(j.message);
+      localStorage.setItem('user', JSON.stringify(j.user));
+      window.location = j.user.role==='receiver' ? 'receiver.html' : 'sender.html';
+    }
+    async function doSignup() {
+      const u = document.getElementById('signUser').value;
+      const p = document.getElementById('signPass').value;
+      const r = document.getElementById('signRole').value;
+      const res = await fetch('/api/signup', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username:u, password:p, role:r })
+      });
+      const j = await res.json();
+      if (!j.success) return alert(j.message);
+      localStorage.setItem('user', JSON.stringify(j.user));
+      window.location = r==='receiver' ? 'receiver.html' : 'sender.html';
+    }
   </script>
 </body>
 </html>

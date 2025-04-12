@@ -1,152 +1,64 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8"/>
   <title>Receiver Dashboard</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-    }
-    input, textarea, button {
-      margin: 5px 0;
-      padding: 8px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    .container {
-      margin-bottom: 20px;
-      border: 1px solid #ddd;
-      padding: 10px;
-      border-radius: 6px;
-    }
-    .task {
-      border-bottom: 1px solid #ccc;
-      padding: 8px;
-    }
-    .task:last-child {
-      border-bottom: none;
-    }
-  </style>
+  <style> /* same styling as before */ </style>
 </head>
 <body>
-  <h1>Receiver Dashboard</h1>
-  
-  <!-- Section: Create a New Task -->
-  <div class="container">
-    <h2>Create a New Task</h2>
-    <input type="text" id="description" placeholder="Task description">
-    <input type="number" id="payment" placeholder="Payment amount">
-    <input type="text" id="receiverId" placeholder="Your Receiver ID">
-    <button id="createTaskBtn">Create Task</button>
-  </div>
-  
-  <!-- Section: Generate Subtasks -->
-  <div class="container">
-    <h2>Generate Subtasks for a Task</h2>
-    <textarea id="taskDescription" placeholder="Enter full task description here"></textarea>
-    <button id="generateSubtasksBtn">Generate Subtasks</button>
-    <h3>Generated Subtasks:</h3>
-    <pre id="subtasksResult"></pre>
-  </div>
-  
-  <!-- Section: Display All Tasks -->
-  <div class="container">
-    <h2>All Tasks</h2>
-    <div id="tasksList"></div>
-  </div>
-  
+  <h1>Welcome, <span id="userName"></span></h1>
+  <button onclick="logout()">Log Out</button>
+  <h2>Create New Task</h2>
+  <input id="taskDesc" placeholder="Task description" />
+  <input id="taskPay"  placeholder="Payment amount" />
+  <button onclick="createTask()">Create Task</button>
+  <hr/>
+  <h2>Available Tasks</h2>
+  <div id="tasksContainer"></div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    // Socket.io connection for real-time updates.
-    const socket = io();
+    const user = JSON.parse(localStorage.getItem('user')||'null');
+    if (!user || user.role!=='receiver') window.location='index.html';
+    document.getElementById('userName').innerText = user.username;
 
-    // Refresh tasks list from server.
-    async function fetchTasks() {
-      try {
-        const res = await fetch('/api/tasks');
-        const result = await res.json();
-        if (result.success) {
-          const tasksList = document.getElementById('tasksList');
-          tasksList.innerHTML = '';
-          result.tasks.forEach(task => {
-            const div = document.createElement('div');
-            div.className = 'task';
-            div.innerHTML = `<strong>Task ID:</strong> ${task.taskId}<br>
-                             <strong>Description:</strong> ${task.description}<br>
-                             <strong>Payment:</strong> $${task.payment}<br>
-                             <strong>Status:</strong> ${task.status}<br>
-                             <strong>Receiver:</strong> ${task.receiverId}<br>
-                             <strong>Sender:</strong> ${task.senderId ? task.senderId : 'Not assigned'}`;
-            tasksList.appendChild(div);
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching tasks:', error);
-      }
+    async function createTask() {
+      const desc = document.getElementById('taskDesc').value;
+      const pay  = document.getElementById('taskPay').value;
+      const res = await fetch('/api/task', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ description: desc, payment: pay })
+      });
+      const j = await res.json();
+      if (!j.success) return alert(j.message);
+      alert('Task created: ' + j.task.id);
+      loadTasks();
     }
 
-    // Create a new task.
-    document.getElementById('createTaskBtn').addEventListener('click', async () => {
-      const description = document.getElementById('description').value;
-      const payment = document.getElementById('payment').value;
-      const receiverId = document.getElementById('receiverId').value;
-      if (!description || !payment || !receiverId) {
-        alert("Please fill out all fields.");
-        return;
-      }
-      try {
-        const res = await fetch('/api/task', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ description, payment, receiverId })
-        });
-        const result = await res.json();
-        if (result.success) {
-          alert('Task created successfully.');
-          fetchTasks();
-        } else {
-          alert('Error creating task: ' + result.message);
-        }
-      } catch (error) {
-        console.error('Error:', error);
-      }
-    });
+    async function loadTasks() {
+      const res = await fetch('/api/tasks');
+      const j   = await res.json();
+      const c   = document.getElementById('tasksContainer');
+      c.innerHTML = '';
+      j.tasks.forEach(t => {
+        c.innerHTML += `
+          <div>
+            <strong>#${t.id}</strong> ${t.description}
+            ($${t.payment}) – ${t.status}
+          </div>`;
+      });
+    }
 
-    // Generate subtasks.
-    document.getElementById('generateSubtasksBtn').addEventListener('click', async () => {
-      const taskDescription = document.getElementById('taskDescription').value;
-      if (!taskDescription) {
-        alert("Please enter a task description.");
-        return;
-      }
-      try {
-        const res = await fetch('/api/generateSubtasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskDescription })
-        });
-        const result = await res.json();
-        if (result.success) {
-          document.getElementById('subtasksResult').innerText = JSON.stringify(result.subtasks, null, 2);
-        } else {
-          alert("Error generating subtasks: " + result.message);
-        }
-      } catch (error) {
-        console.error('Error generating subtasks:', error);
-      }
-    });
+    function logout() {
+      fetch('/api/logout', { method:'POST' })
+        .then(_=>{ localStorage.removeItem('user'); window.location='index.html'; });
+    }
 
-    // Listen for real-time updates.
-    socket.on('taskCreated', (task) => {
-      fetchTasks();
-    });
-    socket.on('taskUpdated', (task) => {
-      fetchTasks();
-    });
-
-    // Initial fetch of tasks.
-    fetchTasks();
+    loadTasks();
+    const socket = io();
+    socket.on('taskCreated', loadTasks);
+    socket.on('taskUpdated', loadTasks);
   </script>
 </body>
 </html>
