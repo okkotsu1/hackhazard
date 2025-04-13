@@ -39,15 +39,16 @@ function requireLogin(req, res, next) {
 // Helper: Generate subtasks using Groq (simplified)
 async function generateSubtasks(description) {
   const messages = [
-    { role: "system", content: `You are an AI task‑decomposer.  
-Given a single High‑Level Task, break it into exactly three sequential, low‑level subtasks.  
+    { role: "system", content: `You are an AI task‑decomposer.
+Given a single High‑Level Task, break it into exactly three sequential, low‑level subtasks.
 
 For each subtask, provide:
-- "id": 1, 2, or 3  
-- "description": one concise sentence of the action to perform  
-- "criteria": the exact OCR log keywords or patterns that would unambiguously indicate completion of this subtask  
+- "id": 1, 2, or 3
+- "description": one concise sentence of the action to perform
+- "criteria": the exact OCR log keywords or patterns that would unambiguously indicate completion of this subtask
+- "status": which must always be "pending" and nothing else
 
-Do NOT analyze any OCR data yourself—just produce the subtasks and their OCR‑based success criteria.  
+Do NOT analyze any OCR data yourself—just produce the subtasks and their OCR‑based success criteria.
 
 Output (JSON):
 {
@@ -55,26 +56,29 @@ Output (JSON):
     {
       "id": 1,
       "description": "…",
-      "criteria": "…"
+      "criteria": "…",
+      "status": "pending"
     },
     {
       "id": 2,
       "description": "…",
-      "criteria": "…"
+      "criteria": "…",
+      "status": "pending"
     },
     {
       "id": 3,
       "description": "…",
-      "criteria": "…"
+      "criteria": "…",
+      "status": "pending"
     }
   ]
-}`
- },
-    { role: "user",   content: description }
+}` },
+    { role: "user", content: description }
   ];
+  
   const chat = await groq.chat.completions.create({
     messages,
-    model: "qwen-qwq-32b",
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
     temperature: 0.6,
     stream: true
   });
@@ -82,9 +86,11 @@ Output (JSON):
   for await (const chunk of chat) {
     full += chunk.choices[0].delta?.content || "";
   }
-  return JSON.parse(
-    full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)
-  ).subtasks;
+  
+  // Clean any extraneous characters (for example, remove non-ASCII control characters)
+  const cleaned = full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)
+                      .replace(/[^\x20-\x7E]/g, "");
+  return JSON.parse(cleaned).subtasks;
 }
 
 // Authentication Endpoints
@@ -225,18 +231,33 @@ app.post('/api/generateSubtasks', requireLogin, async (req, res) => {
     return res.status(400).json({ success: false, message: 'Missing fields' });
   }
   try {
+    // Check if subtasks already exist for this taskId.
+    const { rows: existingSubtasks } = await db.query(
+      `SELECT id, description, criteria, status
+         FROM subtasks
+         WHERE task_id = $1`,
+      [taskId]
+    );
+    
+    // If subtasks already exist, return them.
+    if (existingSubtasks.length > 0) {
+      return res.json({ success: true, subtasks: existingSubtasks });
+    }
+    
+    // Otherwise, generate new subtasks using the provided task description.
     const subtasks = await generateSubtasks(taskDescription);
     const insertText = `
       INSERT INTO subtasks
         (task_id, id, description, criteria, status)
-      VALUES ($1, $2, $3, $4, 'pending')
+      VALUES ($1, $2, $3, $4, $5)
     `;
     for (const sub of subtasks) {
       await db.query(insertText, [
         taskId,
         sub.id,
         sub.description,
-        sub.criteria
+        sub.criteria,
+        sub.status
       ]);
     }
     io.emit('subtasksGenerated', { taskId, subtasks });
@@ -246,9 +267,8 @@ app.post('/api/generateSubtasks', requireLogin, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
 // Upload result for a subtask
-app.post('/api/upload', requireLogin, async (req, res) => {
+app.post('/api/upload',  async (req, res) => {
   const { senderId, taskId, subtaskId, result } = req.body;
   if (!senderId || !taskId || !subtaskId || !result) {
     return res.status(400).json({ success: false, message: 'Missing fields' });

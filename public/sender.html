@@ -6,7 +6,8 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
     input, button { margin: 5px 0; padding: 8px; width: 100%; box-sizing: border-box; }
-    .task { border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 6px; }
+    .section { margin-bottom: 30px; }
+    .task, .subtask { border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 6px; }
     .subtask { border: 1px solid #ccc; padding: 8px; margin: 8px 0; border-radius: 4px; }
     .subtask-btn { margin-top: 10px; }
   </style>
@@ -14,83 +15,101 @@
 <body>
   <h1>Sender Dashboard</h1>
   
-  <!-- Sender ID input (For debugging; backend now uses session info) -->
-  <div>
-    <label>Your Sender ID:</label>
-    <input type="text" id="senderId" placeholder="Enter your sender ID">
+  <!-- Active Task Section -->
+  <div class="section" id="activeTaskSection" style="display:none;">
+    <h2>Active Task:</h2>
+    <div id="activeTaskContainer"></div>
+    <div id="activeSubtasksContainer" style="display:none;">
+      <h3>Subtasks for Task <span id="activeTaskId"></span>:</h3>
+      <div id="activeSubtasksList"></div>
+    </div>
   </div>
   
-  <!-- Load Tasks Button -->
-  <div>
-    <button onclick="fetchTasks()">Load Available Tasks</button>
-  </div>
-  
-  <!-- Tasks Container -->
-  <div id="tasksContainer">
+  <!-- Available Tasks Section -->
+  <div class="section" id="availableTasksSection">
     <h2>Available Tasks:</h2>
-  </div>
-  
-  <!-- Subtasks Container (initially hidden) -->
-  <div id="subtasksContainer" style="display:none;">
-    <h2>Subtasks for Task <span id="assignedTaskId"></span>:</h2>
-    <div id="subtasksList"></div>
+    <div id="tasksContainer"></div>
   </div>
   
   <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    // Get the logged-in user from localStorage (assumed to be set after login)
     const user = JSON.parse(localStorage.getItem('user') || 'null');
     if (!user || user.role !== 'sender') window.location = 'index.html';
+
     const scanningStates = {};
     let currentTaskId = null;
+    let activeScanningSubtask = null; // <-- Added to track which subtask is scanning
     
+    // Fetch tasks and separate active vs available based on sender_id and status
     async function fetchTasks() {
       try {
         const res = await fetch('/api/tasks');
         const result = await res.json();
-        const container = document.getElementById('tasksContainer');
-        container.innerHTML = '<h2>Available Tasks:</h2>';
+        
+        const availableContainer = document.getElementById('tasksContainer');
+        const activeContainer = document.getElementById('activeTaskContainer');
+        const activeSection = document.getElementById('activeTaskSection');
+        
+        availableContainer.innerHTML = '';
+        activeContainer.innerHTML = '';
+        activeSection.style.display = 'none';
+        
         if (result.success && result.tasks.length > 0) {
-          // *Important change*: Using task.id (not task.taskId)
           result.tasks.forEach(task => {
-            container.innerHTML += `
-              <div class="task">
-                <p><strong>Task ID:</strong> ${task.id}</p>
-                <p><strong>Description:</strong> ${task.description}</p>
-                <p><strong>Payment:</strong> $${task.payment}</p>
-                <p><strong>Status:</strong> ${task.status}</p>
-                <button onclick="assignTask(${task.id})">Assign Task</button>
-              </div>
-            `;
+            // If the task is already assigned to this sender and is active ("doing task")
+            if (task.status === 'doing task' && task.sender_id === user.id) {
+              activeSection.style.display = 'block';
+              activeContainer.innerHTML += `
+                <div class="task" id="active-task-${task.id}">
+                  <p><strong>Task ID:</strong> ${task.id}</p>
+                  <p><strong>Description:</strong> ${task.description}</p>
+                  <p><strong>Payment:</strong> $${task.payment}</p>
+                  <p><strong>Status:</strong> ${task.status}</p>
+                  <button onclick="loadActiveSubtasks(${task.id}, '${task.description}')">
+                    View/Update Subtasks
+                  </button>
+                </div>
+              `;
+            }
+            // Otherwise, if the task is unassigned, list it as available.
+            else if (task.status === 'open') {
+              availableContainer.innerHTML += `
+                <div class="task">
+                  <p><strong>Task ID:</strong> ${task.id}</p>
+                  <p><strong>Description:</strong> ${task.description}</p>
+                  <p><strong>Payment:</strong> $${task.payment}</p>
+                  <p><strong>Status:</strong> ${task.status}</p>
+                  <button onclick="assignTask(${task.id})">Assign Task</button>
+                </div>
+              `;
+            }
           });
         } else {
-          container.innerHTML += '<p>No available tasks.</p>';
+          availableContainer.innerHTML = '<p>No available tasks.</p>';
         }
       } catch (error) {
         console.error("Error fetching tasks:", error);
       }
     }
     
+    // Assign an available task to the sender.
     async function assignTask(taskId) {
-      // Retrieve senderId from input (for now; backend will override with session info)
-      const senderId = document.getElementById('senderId').value;
-      if (!senderId) {
-        alert("Please enter your sender ID.");
-        return;
-      }
+      const senderId = user.id; // Use the logged-in user's id
       try {
-        // *Important change*: taskId is now a valid number from task.id
         const res = await fetch('/api/assign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // Even if we send senderId here, the backend uses req.session.user.id
           body: JSON.stringify({ taskId, senderId })
         });
         const result = await res.json();
         if (result.success) {
           alert(`Task ${taskId} assigned to you.`);
-          currentTaskId = taskId;
-          generateAndDisplaySubtasks(result.task.description, taskId);
+          // After assignment, refresh tasks
+          fetchTasks();
+          // And load the active task's subtasks.
+          loadActiveSubtasks(taskId, result.task.description);
         } else {
           alert("Error assigning task: " + result.message);
         }
@@ -99,23 +118,27 @@
       }
     }
     
-    async function generateAndDisplaySubtasks(taskDescription, taskId) {
+    // Load active subtasks for a given task.
+    async function loadActiveSubtasks(taskId, taskDescription) {
+      currentTaskId = taskId;
+      document.getElementById('activeTaskId').innerText = taskId;
+      // Generate subtasks if not already generated for this task.
       try {
         const res = await fetch('/api/generateSubtasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskDescription, taskId })
+          body: JSON.stringify({ taskId, taskDescription })
         });
         const result = await res.json();
         if (result.success) {
-          document.getElementById('assignedTaskId').innerText = taskId;
-          const subtasksList = document.getElementById('subtasksList');
+          const subtasksList = document.getElementById('activeSubtasksList');
           subtasksList.innerHTML = '';
           result.subtasks.forEach(subtask => {
             subtasksList.innerHTML += `
-              <div class="subtask">
+              <div class="subtask" id="subtask-${subtask.id}">
                 <p><strong>Subtask ${subtask.id}:</strong> ${subtask.description}</p>
                 <p><strong>Criteria:</strong> ${subtask.criteria}</p>
+                <p><strong>Status:</strong> <span class="status">${subtask.status || 'pending'}</span></p>
                 <button class="subtask-btn" id="btn-${subtask.id}"
                   onclick="toggleScanning(${subtask.id}, '${encodeURIComponent(subtask.criteria)}')">
                   Do subtask
@@ -124,7 +147,7 @@
             `;
             scanningStates[subtask.id] = false;
           });
-          document.getElementById('subtasksContainer').style.display = 'block';
+          document.getElementById('activeSubtasksContainer').style.display = 'block';
         } else {
           alert("Error generating subtasks: " + result.message);
         }
@@ -133,22 +156,47 @@
       }
     }
     
+    // Modify toggleScanning to allow only one active scanning at a time.
+    activeScanningSubtask = null;
     async function toggleScanning(subtaskId, criteria) {
       const btn = document.getElementById(`btn-${subtaskId}`);
-      if (!scanningStates[subtaskId]) {
+      // If no scanning is active, start scanning.
+      if (activeScanningSubtask === null) {
         await window.electronAPI.startScanning(currentTaskId, subtaskId, decodeURIComponent(criteria));
         btn.innerText = "Stop scanning";
+        activeScanningSubtask = subtaskId;
         scanningStates[subtaskId] = true;
-      } else {
+      } 
+      // If this subtask is the one currently scanning, stop it.
+      else if (activeScanningSubtask === subtaskId) {
         await window.electronAPI.stopScanning();
         btn.innerText = "Do subtask";
+        activeScanningSubtask = null;
         scanningStates[subtaskId] = false;
+      } 
+      // Otherwise, another subtask is scanning.
+      else {
+        alert("Another subtask is already being scanned. Please stop it before starting a new one.");
       }
     }
     
+    // Listen for server-sent updates for tasks and subtasks.
     const socket = io();
     socket.on('taskUpdated', () => fetchTasks());
+    socket.on('subtaskUpdated', (data) => {
+      // data should include: taskId, subtaskId, status.
+      if (currentTaskId === data.taskId) {
+        const subtaskDiv = document.getElementById(`subtask-${data.subtaskId}`);
+        if (subtaskDiv) {
+          const statusSpan = subtaskDiv.querySelector('.status');
+          if (statusSpan) {
+            statusSpan.innerText = data.status;
+          }
+        }
+      }
+    });
     
+    // On load, fetch and display tasks.
     fetchTasks();
   </script>
 </body>

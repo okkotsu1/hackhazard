@@ -7,8 +7,16 @@ import subprocess
 import signal
 import sys
 import time
+import asyncio
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# --- Import and initialize Groq SDK ---
+from groq import Groq  # Adjust this import as needed for your Groq package
+
+# Ensure your Groq API key is set in an environment variable
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+groq = Groq(api_key=GROQ_API_KEY)
 
 # --- CLI args ---
 parser = argparse.ArgumentParser(description='OCR Data Uploader for a Subtask')
@@ -20,7 +28,7 @@ args = parser.parse_args()
 TASK_ID     = args.taskID
 SUBTASK_ID  = args.subtaskID
 CRITERIA    = args.criteria
-SENDER_ID   = "sender123"
+SENDER_ID   = 1
 DB_PATH     = r"C:\Users\shiva\.screenpipe\db.sqlite"
 UPLOAD_URL  = "http://localhost:3000/api/upload"
 MARKER_FILE = "last_frame_id.txt"
@@ -90,8 +98,47 @@ def fetch_new_ocr_data():
     return rows
 
 def evaluate_task(filtered_data, criteria):
-    # TODO: implement your pass/fail logic here
-    return "pass"
+    """
+    Combines OCR text and uses the Groq API to evaluate whether the text meets the criteria.
+    """
+    # Combine OCR texts from filtered data into one string.
+    ocr_text = "\n".join([text for _, text in filtered_data])
+    prompt = (
+        f"Given the following OCR output:\n{ocr_text}\n"
+        f"Evaluate whether this meets the criteria: {criteria}\n"
+        f"Respond with only 'pass' if it meets the criteria or 'fail' if it does not."
+    )
+    
+    async def get_evaluation():
+        try:
+            # Call Groq API synchronously by not using streaming
+            response = groq.chat.completions.create(
+                
+                messages=[
+                    {"role": "system", "content": "You are an expert OCR evaluator."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="qwen-qwq-32b",   
+                temperature=0.0,
+                reasoning_format='hidden',
+                top_p=1.0
+            )
+            # Assume response is now a complete object.
+            return response.choices[0].message.content
+        except Exception as e:
+            print("Error during Groq API call:", e)
+            return ""
+    
+    try:
+        evaluation = asyncio.run(get_evaluation())
+        print(f"Groq evaluation response: {evaluation}")
+        if "pass" in evaluation:
+            return "pass"
+        else:
+            return "fail"
+    except Exception as e:
+        print("Error during evaluation:", e)
+        return "fail"
 
 def push_result():
     rows = fetch_new_ocr_data()
@@ -109,6 +156,8 @@ def push_result():
         "result": result
     }
     try:
+        # Adding an example Authorization header. Replace with a valid token if your endpoint requires auth.
+        
         resp = requests.post(UPLOAD_URL, json=payload)
         resp.raise_for_status()
         try:
@@ -123,7 +172,7 @@ if __name__ == "__main__":
     print(f"Starting OCR Uploader for Task {TASK_ID}, Subtask {SUBTASK_ID}...")
     start_screenpipe()
     scheduler = BackgroundScheduler()
-    scheduler.add_job(push_result, 'interval', minutes=5)
+    scheduler.add_job(push_result, 'interval', seconds=15)
     scheduler.start()
     print("Uploader started; pushing results every 5 minutes.")
     try:
