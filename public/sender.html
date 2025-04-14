@@ -1,203 +1,458 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Sender Dashboard</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    input, button { margin: 5px 0; padding: 8px; width: 100%; box-sizing: border-box; }
-    .section { margin-bottom: 30px; }
-    .task, .subtask { border: 1px solid #ddd; padding: 10px; margin: 10px 0; border-radius: 6px; }
-    .subtask { border: 1px solid #ccc; padding: 8px; margin: 8px 0; border-radius: 4px; }
-    .subtask-btn { margin-top: 10px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sender Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+        .subtask-item {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+        }
+        .subtask-item h3 {
+            margin-top: 0;
+        }
+        .error {
+            color: #e74c3c;
+            padding: 10px;
+            background-color: #fadbd8;
+            border-radius: 5px;
+        }
+        .success {
+            color: #27ae60;
+            padding: 10px;
+            background-color: #d4efdf;
+            border-radius: 5px;
+        }
+        .pending {
+            color: #f39c12;
+        }
+        .passed {
+            color: #27ae60;
+        }
+        .scan-button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .scan-button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        #status-message {
+            margin: 10px 0;
+        }
+    </style>
 </head>
 <body>
-  <h1>Sender Dashboard</h1>
-  
-  <!-- Active Task Section -->
-  <div class="section" id="activeTaskSection" style="display:none;">
-    <h2>Active Task:</h2>
-    <div id="activeTaskContainer"></div>
-    <div id="activeSubtasksContainer" style="display:none;">
-      <h3>Subtasks for Task <span id="activeTaskId"></span>:</h3>
-      <div id="activeSubtasksList"></div>
+    <h1>Sender Dashboard</h1>
+    <div id="task-info">
+        <p>Active Task: <span id="active-task">None</span></p>
     </div>
-  </div>
-  
-  <!-- Available Tasks Section -->
-  <div class="section" id="availableTasksSection">
-    <h2>Available Tasks:</h2>
-    <div id="tasksContainer"></div>
-  </div>
-  
-  <!-- Socket.io -->
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    // Get the logged-in user from localStorage (assumed to be set after login)
-    const user = JSON.parse(localStorage.getItem('user') || 'null');
-    if (!user || user.role !== 'sender') window.location = 'index.html';
+    <div id="subtasks-section">
+        <h2>Subtasks for Task: <span id="task-title">None</span></h2>
+        <div id="status-message"></div>
+        <div id="subtask-container">
+            <!-- Subtasks will be dynamically rendered here -->
+        </div>
+    </div>
+    <div id="available-tasks-section">
+        <h2>Available Tasks:</h2>
+        <div id="available-tasks">
+            <!-- Available tasks will be dynamically rendered here -->
+        </div>
+    </div>
 
-    const scanningStates = {};
-    let currentTaskId = null;
-    let activeScanningSubtask = null; // <-- Added to track which subtask is scanning
-    
-    // Fetch tasks and separate active vs available based on sender_id and status
-    async function fetchTasks() {
-      try {
-        const res = await fetch('/api/tasks');
-        const result = await res.json();
-        
-        const availableContainer = document.getElementById('tasksContainer');
-        const activeContainer = document.getElementById('activeTaskContainer');
-        const activeSection = document.getElementById('activeTaskSection');
-        
-        availableContainer.innerHTML = '';
-        activeContainer.innerHTML = '';
-        activeSection.style.display = 'none';
-        
-        if (result.success && result.tasks.length > 0) {
-          result.tasks.forEach(task => {
-            // If the task is already assigned to this sender and is active ("doing task")
-            if (task.status === 'doing task' && task.sender_id === user.id) {
-              activeSection.style.display = 'block';
-              activeContainer.innerHTML += `
-                <div class="task" id="active-task-${task.id}">
-                  <p><strong>Task ID:</strong> ${task.id}</p>
-                  <p><strong>Description:</strong> ${task.description}</p>
-                  <p><strong>Payment:</strong> $${task.payment}</p>
-                  <p><strong>Status:</strong> ${task.status}</p>
-                  <button onclick="loadActiveSubtasks(${task.id}, '${task.description}')">
-                    View/Update Subtasks
-                  </button>
-                </div>
-              `;
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Global variables
+        let currentTaskId = null;
+        let currentSubtasks = [];
+        let scanningInProgress = false;
+        const socket = io();
+
+        // Check if we're running in Electron
+        const isElectron = () => {
+            return window.electronAPI !== undefined;
+        };
+
+        // Initialize the dashboard
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                await fetchUserInfo();
+                await fetchAvailableTasks();
+                await fetchCurrentTask();
+            } catch (error) {
+                showStatusMessage(`Error initializing dashboard: ${error.message}`, 'error');
             }
-            // Otherwise, if the task is unassigned, list it as available.
-            else if (task.status === 'open') {
-              availableContainer.innerHTML += `
-                <div class="task">
-                  <p><strong>Task ID:</strong> ${task.id}</p>
-                  <p><strong>Description:</strong> ${task.description}</p>
-                  <p><strong>Payment:</strong> $${task.payment}</p>
-                  <p><strong>Status:</strong> ${task.status}</p>
-                  <button onclick="assignTask(${task.id})">Assign Task</button>
-                </div>
-              `;
+        });
+
+        // Fetch user information
+        async function fetchUserInfo() {
+            try {
+                const response = await fetch('/api/user');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch user info');
+                }
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Unknown error');
+                }
+                // Update UI with user info if needed
+            } catch (error) {
+                console.error('Error fetching user info:', error);
+                // Handle authentication errors
+                if (error.message.includes('Not logged in')) {
+                    window.location.href = '/index.html';
+                }
             }
-          });
-        } else {
-          availableContainer.innerHTML = '<p>No available tasks.</p>';
         }
-      } catch (error) {
-        console.error("Error fetching tasks:", error);
-      }
-    }
-    
-    // Assign an available task to the sender.
-    async function assignTask(taskId) {
-      const senderId = user.id; // Use the logged-in user's id
-      try {
-        const res = await fetch('/api/assign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId, senderId })
+
+        // Fetch available tasks
+        async function fetchAvailableTasks() {
+            try {
+                const response = await fetch('/api/tasks');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch available tasks');
+                }
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Unknown error');
+                }
+                renderAvailableTasks(data.tasks);
+            } catch (error) {
+                console.error('Error fetching available tasks:', error);
+                showStatusMessage(`Error loading available tasks: ${error.message}`, 'error');
+            }
+        }
+
+        // Fetch current assigned task
+        async function fetchCurrentTask() {
+            try {
+                const response = await fetch('/api/current-task');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch current task');
+                }
+                const data = await response.json();
+                if (!data.success) {
+                    // No current task is not an error
+                    return;
+                }
+                
+                if (data.task) {
+                    currentTaskId = data.task.id;
+                    document.getElementById('active-task').textContent = data.task.description;
+                    document.getElementById('task-title').textContent = data.task.description;
+                    
+                    // Fetch subtasks for this task
+                    await fetchSubtasks(currentTaskId);
+                }
+            } catch (error) {
+                console.error('Error fetching current task:', error);
+                showStatusMessage(`Error loading current task: ${error.message}`, 'error');
+            }
+        }
+
+        // Fetch subtasks for a task
+        async function fetchSubtasks(taskId) {
+            try {
+                const response = await fetch(`/api/subtasks/${taskId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch subtasks');
+                }
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Unknown error');
+                }
+                
+                currentSubtasks = data.subtasks;
+                renderSubtasks(currentSubtasks);
+            } catch (error) {
+                console.error('Error fetching subtasks:', error);
+                showStatusMessage(`Error loading subtasks: ${error.message}`, 'error');
+            }
+        }
+
+        // Render available tasks
+        function renderAvailableTasks(tasks) {
+            const container = document.getElementById('available-tasks');
+            container.innerHTML = '';
+            
+            if (!tasks || tasks.length === 0) {
+                container.innerHTML = '<p>No tasks available at this time.</p>';
+                return;
+            }
+            
+            tasks.forEach(task => {
+                if (!task || typeof task !== 'object') {
+                    console.error('Invalid task data:', task);
+                    return;
+                }
+                
+                const taskElement = document.createElement('div');
+                taskElement.className = 'task-item';
+                taskElement.innerHTML = `
+                    <h3>${task.description || 'Untitled Task'}</h3>
+                    <p>Payment: $${task.payment || '0'}</p>
+                    <button class="assign-button" data-id="${task.id}">Accept Task</button>
+                `;
+                container.appendChild(taskElement);
+            });
+            
+            // Add event listeners to buttons
+            document.querySelectorAll('.assign-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const taskId = this.dataset.id;
+                    assignTask(taskId);
+                });
+            });
+        }
+
+        // Render subtasks with proper error handling
+        function renderSubtasks(subtasks) {
+            const subtaskContainer = document.getElementById('subtask-container');
+            subtaskContainer.innerHTML = ''; // Clear existing content
+            
+            if (!subtasks || !Array.isArray(subtasks) || subtasks.length === 0) {
+                subtaskContainer.innerHTML = '<p class="error">No subtasks available for this task.</p>';
+                return;
+            }
+            
+            subtasks.forEach(subtask => {
+                if (!subtask || typeof subtask !== 'object') {
+                    console.error('Invalid subtask data:', subtask);
+                    return;
+                }
+                
+                const subtaskElement = document.createElement('div');
+                subtaskElement.className = 'subtask-item';
+                
+                // Create subtask content with error checking for each property
+                subtaskElement.innerHTML = `
+                    <h3>Subtask ${subtask.id || 'Unknown'}</h3>
+                    <p><strong>Description:</strong> ${subtask.description || 'No description'}</p>
+                    <p><strong>Criteria:</strong> ${subtask.criteria || 'No criteria'}</p>
+                    <p><strong>Status:</strong> <span class="${subtask.status || 'pending'}">${subtask.status || 'pending'}</span></p>
+                `;
+                
+                // Only add scan button if status is pending
+                if (subtask.status === 'pending') {
+                    const scanButton = document.createElement('button');
+                    scanButton.className = 'scan-button';
+                    scanButton.textContent = 'Start Scanning';
+                    scanButton.dataset.id = subtask.id || '';
+                    scanButton.dataset.criteria = encodeURIComponent(subtask.criteria || '');
+                    
+                    // Add button to subtask element
+                    subtaskElement.appendChild(scanButton);
+                }
+                
+                subtaskContainer.appendChild(subtaskElement);
+            });
+            
+            // Add event listeners to buttons after they're created
+            attachScanButtonListeners();
+        }
+
+        // Attach event listeners to scan buttons
+        function attachScanButtonListeners() {
+            document.querySelectorAll('.scan-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const subtaskId = this.dataset.id;
+                    const criteria = this.dataset.criteria;
+                    
+                    if (!subtaskId || !criteria) {
+                        showStatusMessage('Missing subtask information. Cannot start scanning.', 'error');
+                        return;
+                    }
+                    
+                    if (!currentTaskId) {
+                        showStatusMessage('No active task. Cannot start scanning.', 'error');
+                        return;
+                    }
+                    
+                    startScanning(currentTaskId, subtaskId, criteria);
+                });
+            });
+        }
+
+        // Start scanning for a subtask
+        async function startScanning(taskId, subtaskId, criteria) {
+            if (scanningInProgress) {
+                showStatusMessage('Scanning already in progress.', 'error');
+                return;
+            }
+            
+            try {
+                scanningInProgress = true;
+                showStatusMessage('Starting scanning...', 'success');
+                
+                // Disable all scan buttons
+                document.querySelectorAll('.scan-button').forEach(btn => {
+                    btn.disabled = true;
+                });
+                
+                let result;
+                
+                if (isElectron()) {
+                    // Use Electron API if available
+                    result = await window.electronAPI.startScanning(taskId, subtaskId, criteria);
+                    
+                    if (!result || result.success === false) {
+                        throw new Error(result?.message || 'Failed to start scanning');
+                    }
+                    
+                    showStatusMessage('Scanning in progress. OCR data is being analyzed...', 'success');
+                } else {
+                    // Fallback for web-only mode (if applicable)
+                    showStatusMessage('Scanning not available in web mode.', 'error');
+                    scanningInProgress = false;
+                    
+                    // Re-enable scan buttons
+                    document.querySelectorAll('.scan-button').forEach(btn => {
+                        btn.disabled = false;
+                    });
+                    
+                    return;
+                }
+                
+                // Set up a listener for subtask updates
+                setupSubtaskUpdateListener(taskId, subtaskId);
+                
+            } catch (error) {
+                console.error('Error starting scanning:', error);
+                showStatusMessage(`Error starting scanning: ${error.message}`, 'error');
+                scanningInProgress = false;
+                
+                // Re-enable scan buttons
+                document.querySelectorAll('.scan-button').forEach(btn => {
+                    btn.disabled = false;
+                });
+            }
+        }
+
+        // Set up a listener for subtask updates
+        function setupSubtaskUpdateListener(taskId, subtaskId) {
+            // This could be a WebSocket listener or a polling mechanism
+            // For simplicity, we'll use a polling approach here
+            const checkInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/subtask-status/${taskId}/${subtaskId}`);
+                    if (!response.ok) {
+                        throw new Error('Failed to fetch subtask status');
+                    }
+                    
+                    const data = await response.json();
+                    if (!data.success) {
+                        throw new Error(data.message || 'Unknown error');
+                    }
+                    
+                    // If status has changed, update UI
+                    if (data.status !== 'pending') {
+                        clearInterval(checkInterval);
+                        scanningInProgress = false;
+                        
+                        // Refresh subtasks
+                        await fetchSubtasks(taskId);
+                        
+                        showStatusMessage(`Subtask ${subtaskId} ${data.status === 'passed' ? 'passed!' : 'failed.'}`, 
+                            data.status === 'passed' ? 'success' : 'error');
+                    }
+                } catch (error) {
+                    console.error('Error checking subtask status:', error);
+                }
+            }, 5000); // Check every 5 seconds
+            
+            // Clear interval after 10 minutes to prevent indefinite polling
+            setTimeout(() => {
+                clearInterval(checkInterval);
+                if (scanningInProgress) {
+                    scanningInProgress = false;
+                    showStatusMessage('Scanning timed out. Please try again.', 'error');
+                    
+                    // Re-enable scan buttons
+                    document.querySelectorAll('.scan-button').forEach(btn => {
+                        btn.disabled = false;
+                    });
+                }
+            }, 10 * 60 * 1000);
+        }
+
+        // Assign a task to the current user
+        async function assignTask(taskId) {
+            try {
+                showStatusMessage('Assigning task...', 'info');
+                
+                const response = await fetch('/api/assign', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ taskId })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.message || `Server returned ${response.status}`);
+                }
+                
+                if (!data.success) {
+                    throw new Error(data.message || 'Unknown error occurred');
+                }
+                
+                showStatusMessage('Task assigned successfully!', 'success');
+                
+                // Refresh the page to show the new task
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+                
+            } catch (error) {
+                console.error('Error assigning task:', error);
+                showStatusMessage(`Error assigning task: ${error.message}`, 'error');
+            }
+        }
+
+        // Show status message
+        function showStatusMessage(message, type = 'info') {
+            const statusElement = document.getElementById('status-message');
+            statusElement.textContent = message;
+            statusElement.className = type;
+            
+            // Clear message after 5 seconds for non-error messages
+            if (type !== 'error') {
+                setTimeout(() => {
+                    statusElement.textContent = '';
+                    statusElement.className = '';
+                }, 5000);
+            }
+        }
+
+        // Listen for socket events
+        socket.on('subtaskUpdated', (data) => {
+            if (data.taskId === currentTaskId) {
+                fetchSubtasks(currentTaskId);
+            }
         });
-        const result = await res.json();
-        if (result.success) {
-          alert(`Task ${taskId} assigned to you.`);
-          // After assignment, refresh tasks
-          fetchTasks();
-          // And load the active task's subtasks.
-          loadActiveSubtasks(taskId, result.task.description);
-        } else {
-          alert("Error assigning task: " + result.message);
-        }
-      } catch (error) {
-        console.error("Error assigning task:", error);
-      }
-    }
-    
-    // Load active subtasks for a given task.
-    async function loadActiveSubtasks(taskId, taskDescription) {
-      currentTaskId = taskId;
-      document.getElementById('activeTaskId').innerText = taskId;
-      // Generate subtasks if not already generated for this task.
-      try {
-        const res = await fetch('/api/generateSubtasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId, taskDescription })
+
+        socket.on('taskUpdated', (data) => {
+            fetchAvailableTasks();
+            if (data.id === currentTaskId) {
+                fetchCurrentTask();
+            }
         });
-        const result = await res.json();
-        if (result.success) {
-          const subtasksList = document.getElementById('activeSubtasksList');
-          subtasksList.innerHTML = '';
-          result.subtasks.forEach(subtask => {
-            subtasksList.innerHTML += `
-              <div class="subtask" id="subtask-${subtask.id}">
-                <p><strong>Subtask ${subtask.id}:</strong> ${subtask.description}</p>
-                <p><strong>Criteria:</strong> ${subtask.criteria}</p>
-                <p><strong>Status:</strong> <span class="status">${subtask.status || 'pending'}</span></p>
-                <button class="subtask-btn" id="btn-${subtask.id}"
-                  onclick="toggleScanning(${subtask.id}, '${encodeURIComponent(subtask.criteria)}')">
-                  Do subtask
-                </button>
-              </div>
-            `;
-            scanningStates[subtask.id] = false;
-          });
-          document.getElementById('activeSubtasksContainer').style.display = 'block';
-        } else {
-          alert("Error generating subtasks: " + result.message);
-        }
-      } catch (error) {
-        console.error('Error generating subtasks:', error);
-      }
-    }
-    
-    // Modify toggleScanning to allow only one active scanning at a time.
-    activeScanningSubtask = null;
-    async function toggleScanning(subtaskId, criteria) {
-      const btn = document.getElementById(`btn-${subtaskId}`);
-      // If no scanning is active, start scanning.
-      if (activeScanningSubtask === null) {
-        await window.electronAPI.startScanning(currentTaskId, subtaskId, decodeURIComponent(criteria));
-        btn.innerText = "Stop scanning";
-        activeScanningSubtask = subtaskId;
-        scanningStates[subtaskId] = true;
-      } 
-      // If this subtask is the one currently scanning, stop it.
-      else if (activeScanningSubtask === subtaskId) {
-        await window.electronAPI.stopScanning();
-        btn.innerText = "Do subtask";
-        activeScanningSubtask = null;
-        scanningStates[subtaskId] = false;
-      } 
-      // Otherwise, another subtask is scanning.
-      else {
-        alert("Another subtask is already being scanned. Please stop it before starting a new one.");
-      }
-    }
-    
-    // Listen for server-sent updates for tasks and subtasks.
-    const socket = io();
-    socket.on('taskUpdated', () => fetchTasks());
-    socket.on('subtaskUpdated', (data) => {
-      // data should include: taskId, subtaskId, status.
-      if (currentTaskId === data.taskId) {
-        const subtaskDiv = document.getElementById(`subtask-${data.subtaskId}`);
-        if (subtaskDiv) {
-          const statusSpan = subtaskDiv.querySelector('.status');
-          if (statusSpan) {
-            statusSpan.innerText = data.status;
-          }
-        }
-      }
-    });
-    
-    // On load, fetch and display tasks.
-    fetchTasks();
-  </script>
+    </script>
 </body>
 </html>

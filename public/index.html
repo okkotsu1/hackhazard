@@ -1,57 +1,145 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Login / Signup</title>
-  <style>
-    body { font-family: Arial; max-width: 400px; margin: 50px auto; }
-    input, select, button { width: 100%; margin: 8px 0; padding: 8px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Management System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+        }
+        input, select, button {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #5cb85c;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #4cae4c;
+        }
+        .error {
+            color: red;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-  <h2>Login</h2>
-  <input id="loginUser"     placeholder="Username" />
-  <input id="loginPass" type="password" placeholder="Password" />
-  <button onclick="doLogin()">Log In</button>
-  <hr/>
-  <h2>Sign Up</h2>
-  <input id="signUser"      placeholder="Username" />
-  <input id="signPass" type="password" placeholder="Password" />
-  <select id="signRole">
-    <option value="">Select Role</option>
-    <option value="receiver">Receiver</option>
-    <option value="sender">Sender</option>
-  </select>
-  <button onclick="doSignup()">Sign Up</button>
+    <div class="container">
+        <h1>Task Management System</h1>
+        <div id="login-form">
+            <h2>Login</h2>
+            <form id="login">
+                <input type="text" id="login-username" placeholder="Username" required>
+                <input type="password" id="login-password" placeholder="Password" required>
+                <button type="submit">Log In</button>
+            </form>
+        </div>
+        <div id="signup-form" style="display:none;">
+            <h2>Sign Up</h2>
+            <form id="signup">
+                <input type="text" id="signup-username" placeholder="Username" required>
+                <input type="password" id="signup-password" placeholder="Password" required>
+                <select id="signup-role" required>
+                    <option value="">Select Role</option>
+                    <option value="receiver">Receiver</option>
+                    <option value="sender">Sender</option>
+                </select>
+                <button type="submit">Sign Up</button>
+            </form>
+        </div>
+        <p id="toggle-form">Don't have an account? <a href="#" id="toggle-link">Sign Up</a></p>
+        <p class="error" id="error-message"></p>
+    </div>
 
-  <script>
-    async function doLogin() {
-      const u = document.getElementById('loginUser').value;
-      const p = document.getElementById('loginPass').value;
-      const res = await fetch('/api/login', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ username:u, password:p })
-      });
-      const j = await res.json();
-      if (!j.success) return alert(j.message);
-      localStorage.setItem('user', JSON.stringify(j.user));
-      window.location = j.user.role==='receiver' ? 'receiver.html' : 'sender.html';
-    }
-    async function doSignup() {
-      const u = document.getElementById('signUser').value;
-      const p = document.getElementById('signPass').value;
-      const r = document.getElementById('signRole').value;
-      const res = await fetch('/api/signup', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ username:u, password:p, role:r })
-      });
-      const j = await res.json();
-      if (!j.success) return alert(j.message);
-      localStorage.setItem('user', JSON.stringify(j.user));
-      window.location = r==='receiver' ? 'receiver.html' : 'sender.html';
-    }
-  </script>
+    <script>
+        const loginForm = document.getElementById('login-form');
+        const signupForm = document.getElementById('signup-form');
+        const toggleForm = document.getElementById('toggle-form');
+        const toggleLink = document.getElementById('toggle-link');
+        const errorMessage = document.getElementById('error-message');
+
+        toggleLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            loginForm.style.display = loginForm.style.display === 'none' ? 'block' : 'none';
+            signupForm.style.display = signupForm.style.display === 'none' ? 'block' : 'none';
+            toggleLink.textContent = toggleLink.textContent === 'Sign Up' ? 'Log In' : 'Sign Up';
+            errorMessage.textContent = '';
+        });
+
+        document.getElementById('login').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    window.location.href = data.user.role === 'receiver' ? '/receiver.html' : '/sender.html';
+                } else {
+                    errorMessage.textContent = data.message;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorMessage.textContent = 'An error occurred. Please try again.';
+            }
+        });
+
+        document.getElementById('signup').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('signup-username').value;
+            const password = document.getElementById('signup-password').value;
+            const role = document.getElementById('signup-role').value;
+            
+            try {
+                const response = await fetch('/api/signup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, role })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    window.location.href = role === 'receiver' ? '/receiver.html' : '/sender.html';
+                } else {
+                    errorMessage.textContent = data.message;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorMessage.textContent = 'An error occurred. Please try again.';
+            }
+        });
+    </script>
 </body>
 </html>

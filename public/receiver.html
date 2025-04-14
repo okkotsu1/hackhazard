@@ -1,64 +1,143 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <title>Receiver Dashboard</title>
-  <style> /* same styling as before */ </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receiver Dashboard</title>
+    <style>
+        /* Add some basic styling */
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+        header {
+            background: #f4f4f4;
+            padding: 1rem;
+            text-align: right;
+        }
+        .container {
+            width: 80%;
+            margin: auto;
+            overflow: hidden;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            padding: 0.7rem 1rem;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #555;
+        }
+    </style>
 </head>
 <body>
-  <h1>Welcome, <span id="userName"></span></h1>
-  <button onclick="logout()">Log Out</button>
-  <h2>Create New Task</h2>
-  <input id="taskDesc" placeholder="Task description" />
-  <input id="taskPay"  placeholder="Payment amount" />
-  <button onclick="createTask()">Create Task</button>
-  <hr/>
-  <h2>Available Tasks</h2>
-  <div id="tasksContainer"></div>
+    <header>
+        <button id="logout-btn">Log Out</button>
+    </header>
+    <div class="container">
+        <h1>Welcome, <span id="username"></span></h1>
+        <button id="create-task-btn">Create New Task</button>
+        <div id="task-form" style="display:none;">
+            <!-- Task creation form will be dynamically inserted here -->
+        </div>
+        <h2>Available Tasks</h2>
+        <div id="available-tasks">
+            <!-- Available tasks will be dynamically inserted here -->
+        </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // JavaScript code for receiver functionality
+        const socket = io();
+        
+        // Fetch and display user info
+        fetch('/api/user')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('username').textContent = data.user.username;
+                }
+            })
+            .catch(error => console.error('Error:', error));
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const user = JSON.parse(localStorage.getItem('user')||'null');
-    if (!user || user.role!=='receiver') window.location='index.html';
-    document.getElementById('userName').innerText = user.username;
+        // Logout functionality
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            fetch('/api/logout', { method: 'POST' })
+                .then(() => window.location.href = '/index.html')
+                .catch(error => console.error('Error:', error));
+        });
 
-    async function createTask() {
-      const desc = document.getElementById('taskDesc').value;
-      const pay  = document.getElementById('taskPay').value;
-      const res = await fetch('/api/task', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ description: desc, payment: pay })
-      });
-      const j = await res.json();
-      if (!j.success) return alert(j.message);
-      alert('Task created: ' + j.task.id);
-      loadTasks();
-    }
+        // Create task functionality
+        document.getElementById('create-task-btn').addEventListener('click', () => {
+            const taskForm = document.getElementById('task-form');
+            taskForm.style.display = 'block';
+            taskForm.innerHTML = `
+                <h3>Create New Task</h3>
+                <form id="new-task-form">
+                    <input type="text" id="task-description" placeholder="Task Description" required>
+                    <input type="number" id="task-payment" placeholder="Payment Amount" required>
+                    <button type="submit">Create Task</button>
+                </form>
+            `;
 
-    async function loadTasks() {
-      const res = await fetch('/api/tasks');
-      const j   = await res.json();
-      const c   = document.getElementById('tasksContainer');
-      c.innerHTML = '';
-      j.tasks.forEach(t => {
-        c.innerHTML += `
-          <div>
-            <strong>#${t.id}</strong> ${t.description}
-            ($${t.payment}) – ${t.status}
-          </div>`;
-      });
-    }
+            document.getElementById('new-task-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const description = document.getElementById('task-description').value;
+                const payment = document.getElementById('task-payment').value;
+                
+                fetch('/api/task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description, payment })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Task created successfully!');
+                        taskForm.style.display = 'none';
+                        fetchAvailableTasks();
+                    } else {
+                        alert('Failed to create task: ' + data.message);
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+            });
+        });
 
-    function logout() {
-      fetch('/api/logout', { method:'POST' })
-        .then(_=>{ localStorage.removeItem('user'); window.location='index.html'; });
-    }
+        // Fetch and display available tasks
+        function fetchAvailableTasks() {
+            fetch('/api/tasks')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const tasksContainer = document.getElementById('available-tasks');
+                        tasksContainer.innerHTML = data.tasks.map(task => `
+                            <div class="task">
+                                <h3>${task.description}</h3>
+                                <p>Payment: $${task.payment}</p>
+                                <p>Status: ${task.status}</p>
+                            </div>
+                        `).join('');
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
 
-    loadTasks();
-    const socket = io();
-    socket.on('taskCreated', loadTasks);
-    socket.on('taskUpdated', loadTasks);
-  </script>
+        // Initial fetch of available tasks
+        fetchAvailableTasks();
+
+        // Listen for real-time updates
+        socket.on('taskCreated', (task) => {
+            fetchAvailableTasks();
+        });
+
+        socket.on('taskUpdated', (task) => {
+            fetchAvailableTasks();
+        });
+    </script>
 </body>
 </html>
